@@ -1,23 +1,22 @@
 var qs = require('querystring'),
     url = require('url'),
-    uuid = require('node-uuid'),
     _ = require('underscore'),
-    express = require('express');
+    express = require('express'),
+    oauth = require('../lib/oauth');
 
 
-var _userRepo;
-var requestTokens = {};
-var accessTokens = {};
+var _userRepo,
+    _tokenRepo;
 
 function requestToken(req, res, next) {
-  parseAuthHeader(req, res, function(oauth_params) {
+  oauth.parseAuthHeader(req, res, function(oauth_params) {
     var requestToken = {
-      token: generateToken(),
-      secret: generateToken(),
+      token: oauth.generateToken(),
+      secret: oauth.generateToken(),
       callbackUrl: oauth_params.oauth_callback,
     };
 
-    requestTokens[requestToken.token] = requestToken;
+    _tokenRepo.putRequestToken(requestToken);
 
     var entity = {
       oauth_token: requestToken.token,
@@ -39,10 +38,15 @@ function doBasicAuth(username, password) {
 function authorize(req, res, next) {
   var token = req.query.oauth_token;
   if (!token) return res.send(400, 'invalid token');
-  var requestToken = requestTokens[token];
+  var requestToken = _tokenRepo.getRequestToken(token);
   if (!requestToken) return res.send(400, 'invalid token');
 
-  requestToken.verifier = generateToken();
+  console.log('authorized user', req.user);
+
+  requestToken.user = req.user;
+  requestToken.verifier = oauth.generateToken();
+
+  _tokenRepo.putRequestToken(requestToken);
 
   var callbackUrlObj = url.parse(requestToken.callbackUrl);
   callbackUrlObj.query = callbackUrlObj.query || {};
@@ -54,20 +58,21 @@ function authorize(req, res, next) {
 }
 
 function accessToken(req, res, next) {
-  parseAuthHeader(req, res, function(oauth_params) {
+  oauth.parseAuthHeader(req, res, function(oauth_params) {
     var token = oauth_params.oauth_token;
     if (!token) return res.send(400, 'invalid token');
-    var requestToken = requestTokens[token];
+    var requestToken = _tokenRepo.getRequestToken(token);
     if (!requestToken) return res.send(400, 'invalid token');
 
-    delete requestTokens[token];
+    _tokenRepo.deleteRequestToken(token);
 
     var accessToken = {
-      token: generateToken(),
-      secret: generateToken(),
+      token: oauth.generateToken(),
+      secret: oauth.generateToken(),
+      user: requestToken.user,
     };
 
-    accessTokens[accessToken.token] = requestToken;
+    _tokenRepo.putAccessToken(accessToken);
 
     var entity = {
       oauth_token: accessToken.token,
@@ -81,44 +86,10 @@ function accessToken(req, res, next) {
   });
 }
 
-function getUser(req, res, next) {
-  _userRepo.getUser('buffy.summers', function(err, userInfo) {
-    if (err) {
-      console.log(err);
-      return res.send(404);
-    }
-
-    res.send(200, userInfo);
-  });
-}
-
-function parseAuthHeader(req, res, cb) {
-  // Extract authorization header
-  var authHeader = req.header('Authorization') || '';
-  if (authHeader.substring(0, 6).toLowerCase() != 'oauth ') return res.send(400, 'invalid authorization header');
-  var oauth_params_string = authHeader.substring(6);
-  var oauth_params = {};
-  _.each(oauth_params_string.split(','), function(p) {
-    var ps = p.split('=');
-    if (ps.length != 2) return res.send(400, 'invalid authorization header');
-    var val = qs.unescape(ps[1].replace(/"/g, ''));
-    oauth_params[ps[0]] = val;
-  });
-
-  console.log(oauth_params);
-
-  cb(oauth_params);
-}
-
-function generateToken() {
-  return new Buffer(uuid.v4()).toString('base64');
-}
-
-exports.setup = function(app, userRepo) {
+exports.setup = function(app, tokenRepo, userRepo) {
+  _tokenRepo = tokenRepo;
   _userRepo = userRepo;
   app.post('/oauth/request_token', requestToken);
   app.get('/oauth/authorize', express.basicAuth(doBasicAuth), authorize);
   app.post('/oauth/access_token', accessToken);
-  // TODO: Move & refactor somewhere else
-  app.get('/users/me', getUser);
 };
