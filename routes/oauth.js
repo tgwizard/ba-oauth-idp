@@ -1,7 +1,8 @@
 var qs = require('querystring'),
     url = require('url'),
     uuid = require('node-uuid'),
-    _ = require('underscore');
+    _ = require('underscore'),
+    express = require('express');
 
 
 var _userRepo;
@@ -29,6 +30,10 @@ function requestToken(req, res, next) {
     res.set('Content-Type', 'application/x-www-form-urlencoded');
     res.send(200, entityString);
   });
+}
+
+function doBasicAuth(username, password) {
+  return _userRepo.authenticate(username, password)
 }
 
 function authorize(req, res, next) {
@@ -112,7 +117,7 @@ function generateToken() {
 exports.setup = function(app, userRepo) {
   _userRepo = userRepo;
   app.post('/oauth/request_token', requestToken);
-  app.get('/oauth/authorize', authorize);
+  app.get('/oauth/authorize', express.basicAuth(doBasicAuth), authorize);
   app.post('/oauth/access_token', accessToken);
   // TODO: Move & refactor somewhere else
   app.get('/users/me', getUser);
